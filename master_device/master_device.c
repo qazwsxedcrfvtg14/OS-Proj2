@@ -29,6 +29,7 @@
 #define master_IOCTL_MMAP 0x12345678
 #define master_IOCTL_EXIT 0x12345679
 #define BUF_SIZE 512
+#define MAP_SIZE (PAGE_SIZE * 10)
 
 typedef struct socket * ksocket_t;
 
@@ -50,6 +51,7 @@ int master_close(struct inode *inode, struct file *filp);
 int master_open(struct inode *inode, struct file *filp);
 static long master_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param);
 static ssize_t send_msg(struct file *file, const char __user *buf, size_t count, loff_t *data);//use when user is writing to this device
+static int my_mmap(struct file *filp, struct vm_area_struct *vma);
 
 static ksocket_t sockfd_srv, sockfd_cli;//socket for master and socket for slave
 static struct sockaddr_in addr_srv;//address for master
@@ -58,12 +60,16 @@ static mm_segment_t old_fs;
 static int addr_len;
 //static  struct mmap_info *mmap_msg; // pointer to the mapped data in this device
 
+void mmap_open(struct vm_area_struct *vma) { /* do nothing */ }
+void mmap_close(struct vm_area_struct *vma) { /* do nothing */ }
+
 //file operations
 static struct file_operations master_fops = {
 	.owner = THIS_MODULE,
 	.unlocked_ioctl = master_ioctl,
 	.open = master_open,
 	.write = send_msg,
+	.mmap = my_mmap,
 	.release = master_close
 };
 
@@ -72,6 +78,11 @@ static struct miscdevice master_dev = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.name = "master_device",
 	.fops = &master_fops
+};
+
+struct vm_operations_struct mmap_vm_ops = {
+	.open = mmap_open,
+	.close = mmap_close,
 };
 
 static int __init master_init(void)
@@ -137,11 +148,13 @@ static void __exit master_exit(void)
 
 int master_close(struct inode *inode, struct file *filp)
 {
+	kfree(filp->private_data);
 	return 0;
 }
 
 int master_open(struct inode *inode, struct file *filp)
 {
+	filp->private_data = kmalloc(MAP_SIZE, GFP_KERNEL);
 	return 0;
 }
 
@@ -175,6 +188,7 @@ static long master_ioctl(struct file *file, unsigned int ioctl_num, unsigned lon
 			ret = 0;
 			break;
 		case master_IOCTL_MMAP:
+			ret = ksend(sockfd_cli, file->private_data, ioctl_param, 0);
 			break;
 		case master_IOCTL_EXIT:
 			if(kclose(sockfd_cli) == -1)
@@ -212,6 +226,19 @@ static ssize_t send_msg(struct file *file, const char __user *buf, size_t count,
 }
 
 
+static int my_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	vma->vm_pgoff = virt_to_phys(filp->private_data)>>PAGE_SHIFT;
+	if(remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff, vma->vm_end - vma->vm_start, vma->vm_page_prot) < 0)
+	{
+		pr_err("could not map the address area\n");
+		return -EIO;
+	}
+	vma->vm_ops = &mmap_vm_ops;
+	vma->vm_flags |= VM_RESERVED;
+	vma->vm_private_data = filp->private_data;
+	return 0;
+}
 
 
 module_init(master_init);

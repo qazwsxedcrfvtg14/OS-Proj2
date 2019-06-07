@@ -31,6 +31,7 @@
 
 
 #define BUF_SIZE 512
+#define MAP_SIZE (PAGE_SIZE * 10)
 
 
 
@@ -54,10 +55,14 @@ int slave_close(struct inode *inode, struct file *filp);
 int slave_open(struct inode *inode, struct file *filp);
 static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param);
 ssize_t receive_msg(struct file *filp, char *buf, size_t count, loff_t *offp );
+static int my_mmap(struct file *filp, struct vm_area_struct *vma);
 
 static mm_segment_t old_fs;
 static ksocket_t sockfd_cli;//socket to the master server
 static struct sockaddr_in addr_srv; //address of the master server
+
+void mmap_open(struct vm_area_struct *vma) { /* do nothing */ }
+void mmap_close(struct vm_area_struct *vma) { /* do nothing */ }
 
 //file operations
 static struct file_operations slave_fops = {
@@ -65,6 +70,7 @@ static struct file_operations slave_fops = {
 	.unlocked_ioctl = slave_ioctl,
 	.open = slave_open,
 	.read = receive_msg,
+	.mmap = my_mmap,
 	.release = slave_close
 };
 
@@ -73,6 +79,11 @@ static struct miscdevice slave_dev = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.name = "slave_device",
 	.fops = &slave_fops
+};
+
+struct vm_operations_struct mmap_vm_ops = {
+	.open = mmap_open,
+	.close = mmap_close,
 };
 
 static int __init slave_init(void)
@@ -101,11 +112,13 @@ static void __exit slave_exit(void)
 
 int slave_close(struct inode *inode, struct file *filp)
 {
+	kfree(filp->private_data);
 	return 0;
 }
 
 int slave_open(struct inode *inode, struct file *filp)
 {
+	filp->private_data = kmalloc(MAP_SIZE, GFP_KERNEL);
 	return 0;
 }
 static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param)
@@ -163,7 +176,7 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 			ret = 0;
 			break;
 		case slave_IOCTL_MMAP:
-
+			ret = krecv(sockfd_cli, file->private_data, MAP_SIZE, 0);
 			break;
 
 		case slave_IOCTL_EXIT:
@@ -202,6 +215,19 @@ ssize_t receive_msg(struct file *filp, char *buf, size_t count, loff_t *offp )
 }
 
 
+static int my_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	vma->vm_pgoff = virt_to_phys(filp->private_data)>>PAGE_SHIFT;
+	if(remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff, vma->vm_end - vma->vm_start, vma->vm_page_prot) < 0)
+	{
+		pr_err("could not map the address area\n");
+		return -EIO;
+	}
+	vma->vm_ops = &mmap_vm_ops;
+	vma->vm_flags |= VM_RESERVED;
+	vma->vm_private_data = filp->private_data;
+	return 0;
+}
 
 
 module_init(slave_init);

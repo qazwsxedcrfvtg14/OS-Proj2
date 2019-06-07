@@ -9,8 +9,14 @@
 #include <sys/types.h>
 #include <sys/time.h>
 
+#define slave_IOCTL_CREATESOCK 0x12345677
+#define slave_IOCTL_MMAP 0x12345678
+#define slave_IOCTL_EXIT 0x12345679
+
 #define PAGE_SIZE 4096
 #define BUF_SIZE 512
+#define MAP_SIZE (PAGE_SIZE * 10)
+
 int main (int argc, char* argv[])
 {
 	char buf[BUF_SIZE];
@@ -23,6 +29,7 @@ int main (int argc, char* argv[])
 	struct timeval end;
 	double trans_time; //calulate the time between the device is opened and it is closed
 	char *kernel_address, *file_address;
+	void *mapped_mem, *kernel_mem;
 
 
 	strcpy(file_name, argv[1]);
@@ -41,7 +48,7 @@ int main (int argc, char* argv[])
 		return 1;
 	}
 
-	if(ioctl(dev_fd, 0x12345677, ip) == -1)	//0x12345677 : connect to master in the device
+	if(ioctl(dev_fd, slave_IOCTL_CREATESOCK, ip) == -1)	//slave_IOCTL_CREATESOCK : connect to master in the device
 	{
 		perror("ioclt create slave socket error\n");
 		return 1;
@@ -59,18 +66,42 @@ int main (int argc, char* argv[])
 				file_size += ret;
 			}while(ret > 0);
 			break;
+		case 'm'://mmap
+			kernel_mem = mmap(NULL, MAP_SIZE, PROT_READ, MAP_SHARED, dev_fd, 0);
+			while(1)
+			{
+				posix_fallocate(file_fd, file_size, MAP_SIZE);
+				mapped_mem = mmap(NULL, MAP_SIZE, PROT_WRITE, MAP_SHARED, file_fd, file_size);
+				ret = ioctl(dev_fd, slave_IOCTL_MMAP);
+				if(ret==0)
+					break;
+				else if(ret<0)
+				{
+					perror("ioclt error\n");
+					return 1;
+				}
+				memcpy(mapped_mem, kernel_mem, ret);
+				file_size += ret;
+			}
+			ftruncate(file_fd, file_size);
+			if(ioctl(dev_fd, 0x111, kernel_mem) == -1)
+			{
+				perror("ioclt error\n");
+				return 1;
+			}
+			break;
 	}
 
 
 
-	if(ioctl(dev_fd, 0x12345679) == -1)// end receiving data, close the connection
+	if(ioctl(dev_fd, slave_IOCTL_EXIT) == -1)// end receiving data, close the connection
 	{
 		perror("ioclt client exits error\n");
 		return 1;
 	}
 	gettimeofday(&end, NULL);
 	trans_time = (end.tv_sec - start.tv_sec)*1000 + (end.tv_usec - start.tv_usec)*0.0001;
-	printf("Transmission time: %lf ms, File size: %d bytes\n", trans_time, file_size / 8);
+	printf("Slave: Transmission time: %lf ms, File size: %ld bytes\n", trans_time, file_size );
 
 
 	close(file_fd);
