@@ -299,6 +299,8 @@ ssize_t receive_msg(struct file *filp, char *buf, size_t count, loff_t *offp )
 	char msg[BUF_SIZE];
 	size_t len;
 	len=async_recv_msg(filp,msg,sizeof(msg));
+	if(len<0)
+		return len;
 	if(copy_to_user(buf, msg, len))
 		return -ENOMEM;
 	return len;
