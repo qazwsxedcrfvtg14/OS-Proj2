@@ -80,17 +80,15 @@ int main (int argc, char* argv[])
 				if(tmp>MAP_SIZE) tmp = MAP_SIZE;
 				mapped_mem = mmap(NULL, tmp, PROT_READ, MAP_SHARED, file_fd, i*MAP_SIZE);
 				memcpy(kernel_mem, mapped_mem, tmp);
-				if(ioctl(dev_fd, master_IOCTL_MMAP, tmp)<0&&errno==EAGAIN)
-				{
-					i--;
-					continue;
-				}
+				munmap(mapped_mem, tmp);
+				while(ioctl(dev_fd, master_IOCTL_MMAP, tmp)<0&&errno==EAGAIN);
 			}
 			if (ioctl(dev_fd, 0x111, kernel_mem) == -1)
 			{
 				perror("ioclt server error\n");
 				return 1;
 			}
+			munmap(kernel_mem,MAP_SIZE);
 			break;
 	}
 

@@ -10,6 +10,10 @@ diff data/file2_in data/file2_out
 ./user_program/slave data/file3_out fcntl 127.0.0.1
 diff data/file3_in data/file3_out
 
+./user_program/master data/file4_in fcntl &
+./user_program/slave data/file4_out fcntl 127.0.0.1
+diff data/file4_in data/file4_out
+
 ./user_program/master data/file1_in mmap &
 ./user_program/slave data/file1_out mmap 127.0.0.1
 diff data/file1_in data/file1_out
@@ -22,3 +26,6 @@ diff data/file2_in data/file2_out
 ./user_program/slave data/file3_out mmap 127.0.0.1
 diff data/file3_in data/file3_out
 
+./user_program/master data/file4_in mmap &
+./user_program/slave data/file4_out mmap 127.0.0.1
+diff data/file4_in data/file4_out

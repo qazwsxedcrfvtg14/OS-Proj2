@@ -71,8 +71,6 @@ int main (int argc, char* argv[])
 			kernel_mem = mmap(NULL, MAP_SIZE, PROT_READ, MAP_SHARED, dev_fd, 0);
 			while(1)
 			{
-				posix_fallocate(file_fd, file_size, MAP_SIZE);
-				mapped_mem = mmap(NULL, MAP_SIZE, PROT_WRITE, MAP_SHARED, file_fd, file_size);
 				while((ret = ioctl(dev_fd, slave_IOCTL_MMAP))<0&&errno==EAGAIN);
 				if(ret==0)
 					break;
@@ -81,7 +79,12 @@ int main (int argc, char* argv[])
 					perror("ioclt error\n");
 					return 1;
 				}
-				memcpy(mapped_mem, kernel_mem, ret);
+				posix_fallocate(file_fd, file_size, ret);
+				size_t offset = (file_size/PAGE_SIZE)*PAGE_SIZE;
+				size_t offlen = file_size-offset;
+				mapped_mem = mmap(NULL, offlen+ret, PROT_WRITE, MAP_SHARED, file_fd, offset);
+				memcpy(mapped_mem+offlen, kernel_mem, ret);
+				munmap(mapped_mem,offlen+ret);
 				file_size += ret;
 			}
 			ftruncate(file_fd, file_size);
@@ -90,6 +93,7 @@ int main (int argc, char* argv[])
 				perror("ioclt error\n");
 				return 1;
 			}
+			munmap(kernel_mem,MAP_SIZE);
 			break;
 	}
 

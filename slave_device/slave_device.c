@@ -190,6 +190,7 @@ static ssize_t async_recv_msg(struct file *file, void *msg,size_t count){
 	else
 	{
 		size=count;
+		if(size>MAP_SIZE)size=MAP_SIZE;
 		if(begin<end)
 		{
 			if(size>end-begin)
