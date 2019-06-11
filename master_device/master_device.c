@@ -212,7 +212,7 @@ static ssize_t async_send_msg(struct file *file, void *msg,size_t count){
 	begin = ((struct data_queue*)(file->private_data))->begin;
 	end = ((struct data_queue*)(file->private_data))->end;
 	mutex_unlock(&async_mutex);
-	if( ASYNC_BUF_SIZE - (end-begin)%ASYNC_BUF_SIZE - 1 < count)
+	if( ASYNC_BUF_SIZE - (end-begin+ASYNC_BUF_SIZE)%ASYNC_BUF_SIZE - 1 < count)
 	{
 		ret = -EAGAIN;
 	}
