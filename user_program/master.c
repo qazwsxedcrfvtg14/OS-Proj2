@@ -68,7 +68,7 @@ int main (int argc, char* argv[])
 			do
 			{
 				ret = read(file_fd, buf, sizeof(buf)); // read from the input file
-				write(dev_fd, buf, ret);//write to the the device
+				while(write(dev_fd, buf, ret)<0&&errno=EAGAIN);//write to the the device
 			}while(ret > 0);
 			break;
 		case 'm':
