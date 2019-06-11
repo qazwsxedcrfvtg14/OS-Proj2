@@ -20,6 +20,8 @@
 #include <linux/mm.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
+#include <linux/kthread.h>
+#include <linux/mutex.h>
 #ifndef VM_RESERVED
 #define VM_RESERVED   (VM_DONTEXPAND | VM_DONTDUMP)
 #endif
@@ -30,6 +32,7 @@
 #define master_IOCTL_EXIT 0x12345679
 #define BUF_SIZE 512
 #define MAP_SIZE (PAGE_SIZE * 10)
+#define ASYNC_BUF_SIZE (32*MAP_SIZE)
 
 typedef struct socket * ksocket_t;
 
@@ -83,6 +86,12 @@ static struct miscdevice master_dev = {
 struct vm_operations_struct mmap_vm_ops = {
 	.open = mmap_open,
 	.close = mmap_close,
+};
+
+struct data_queue{
+	char data[MAP_SIZE];
+	int begin,end;
+	char async_buf[ASYNC_BUF_SIZE];
 };
 
 static int __init master_init(void)
@@ -146,23 +155,93 @@ static void __exit master_exit(void)
 	debugfs_remove(file1);
 }
 
+struct mutex async_mutex;
+struct task_struct *async_kthread;
+
 int master_close(struct inode *inode, struct file *filp)
 {
-	kfree(filp->private_data);
+	kthread_stop(async_kthread);
+	return 0;
+}
+
+
+static int async_send(void *private_data)
+{
+	struct data_queue* data=private_data;
+	int begin,end;
+	while(!kthread_should_stop()){
+		mutex_lock(&async_mutex);
+		begin=data->begin;
+		end=data->end;
+		if(begin==end)
+		{
+			mutex_unlock(&async_mutex);
+			set_current_state(TASK_INTERRUPTIBLE);
+			if(kthread_should_stop())break;
+			continue;
+		}
+		else
+		{
+			mutex_unlock(&async_mutex);
+		}
+		if(end<begin)
+			end=ASYNC_BUF_SIZE;
+		ksend(sockfd_cli, (data->async_buf)+begin, end-begin, 0);
+		mutex_lock(&async_mutex);
+		data->begin=end%ASYNC_BUF_SIZE;
+		mutex_unlock(&async_mutex);
+	}
+	kfree(private_data);
 	return 0;
 }
 
 int master_open(struct inode *inode, struct file *filp)
 {
-	filp->private_data = kmalloc(MAP_SIZE, GFP_KERNEL);
+	filp->private_data = kmalloc(sizeof(struct data_queue), GFP_KERNEL);
+	((struct data_queue*)(filp->private_data))->begin=0;
+	((struct data_queue*)(filp->private_data))->end=0;
+	mutex_init(&async_mutex);
+	async_kthread=kthread_run(async_send,filp->private_data,"master_async_send");
 	return 0;
 }
 
+static ssize_t async_send_msg(struct file *file, void *msg,size_t count){
+	int begin,end;
+	long ret;
+	mutex_lock(&async_mutex);
+	begin = ((struct data_queue*)(file->private_data))->begin;
+	end = ((struct data_queue*)(file->private_data))->end;
+	mutex_unlock(&async_mutex);
+	if( ASYNC_BUF_SIZE - (end-begin)%ASYNC_BUF_SIZE - 1 < count)
+	{
+		ret = -EAGAIN;
+	}
+	else
+	{
+		int size=count;
+		if(size>ASYNC_BUF_SIZE-end)
+		{
+			size=ASYNC_BUF_SIZE-end;
+			memcpy(((struct data_queue*)(file->private_data))->async_buf+end,msg,size);
+			end=0;
+			size=count-size;
+		}
+		if(size)
+			memcpy(((struct data_queue*)(file->private_data))->async_buf+end,msg,size);
+		mutex_lock(&async_mutex);
+		((struct data_queue*)(file->private_data))->end=(end+size)%ASYNC_BUF_SIZE;
+		mutex_unlock(&async_mutex);
+		wake_up_process(async_kthread);
+		ret = -EINTR;
+	}
+	return ret;
+}
 
 static long master_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param)
 {
 	long ret = -EINVAL;
 	size_t data_size = 0, offset = 0;
+	int begin,end;
 	char *tmp;
 	pgd_t *pgd;
 	p4d_t *p4d;
@@ -188,15 +267,25 @@ static long master_ioctl(struct file *file, unsigned int ioctl_num, unsigned lon
 			ret = 0;
 			break;
 		case master_IOCTL_MMAP:
-			ret = ksend(sockfd_cli, file->private_data, ioctl_param, 0);
+			ret = async_send_msg(file,((struct data_queue*)(file->private_data))->data,ioctl_param);
 			break;
 		case master_IOCTL_EXIT:
-			if(kclose(sockfd_cli) == -1)
+			mutex_lock(&async_mutex);
+			begin = ((struct data_queue*)(file->private_data))->begin;
+			end = ((struct data_queue*)(file->private_data))->end;
+			mutex_unlock(&async_mutex);
+			if(begin!=end)
 			{
-				printk("kclose cli error\n");
-				return -1;
+				ret = -EAGAIN;
 			}
-			ret = 0;
+			else{
+				if(kclose(sockfd_cli) == -1)
+				{
+					printk("kclose cli error\n");
+					return -1;
+				}
+				ret = 0;
+			}
 			break;
 		default:
 			pgd = pgd_offset(current->mm, ioctl_param);
@@ -213,15 +302,14 @@ static long master_ioctl(struct file *file, unsigned int ioctl_num, unsigned lon
 	set_fs(old_fs);
 	return ret;
 }
+
 static ssize_t send_msg(struct file *file, const char __user *buf, size_t count, loff_t *data)
 {
 //call when user is writing to this device
 	char msg[BUF_SIZE];
 	if(copy_from_user(msg, buf, count))
 		return -ENOMEM;
-	ksend(sockfd_cli, msg, count, 0);
-
-	return count;
+	return async_send_msg(file,msg,count);
 
 }
 

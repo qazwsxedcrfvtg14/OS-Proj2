@@ -79,10 +79,10 @@ int main (int argc, char* argv[])
 				if(tmp>MAP_SIZE) tmp = MAP_SIZE;
 				mapped_mem = mmap(NULL, tmp, PROT_READ, MAP_SHARED, file_fd, i*MAP_SIZE);
 				memcpy(kernel_mem, mapped_mem, tmp);
-				if(ioctl(dev_fd, master_IOCTL_MMAP, tmp) == -1)
+				if(ioctl(dev_fd, master_IOCTL_MMAP, tmp)<0&&errno==EAGAIN)
 				{
-					perror("ioclt server mmap error\n");
-					return 1;
+					i--;
+					continue;
 				}
 			}
 			if (ioctl(dev_fd, 0x111, kernel_mem) == -1)
@@ -93,11 +93,7 @@ int main (int argc, char* argv[])
 			break;
 	}
 
-	if(ioctl(dev_fd, master_IOCTL_EXIT) == -1) // end sending data, close the connection
-	{
-		perror("ioclt server exits error\n");
-		return 1;
-	}
+	while(ioctl(dev_fd, master_IOCTL_EXIT)<0&&errno==EAGAIN); // end sending data, close the connection
 	gettimeofday(&end, NULL);
 	trans_time = (end.tv_sec - start.tv_sec)*1000 + (end.tv_usec - start.tv_usec)*0.0001;
 	printf("Master: Transmission time: %lf ms, File size: %ld bytes\n", trans_time, file_size );
