@@ -230,8 +230,6 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
 
-    printk("slave device ioctl");
-
 	switch(ioctl_num){
 		case slave_IOCTL_CREATESOCK:// create socket and connect to master
 			printk("slave device ioctl create socket");
