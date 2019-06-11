@@ -184,10 +184,7 @@ static ssize_t async_recv_msg(struct file *file, void *msg,size_t count){
 		if(fin==1)
 			ret=0;
 		else
-		{
 			ret=-EAGAIN;
-			wake_up_process(async_kthread);
-		}
 	}
 	else
 	{
@@ -264,6 +261,7 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 			printk("connected to : %s %d\n", tmp, ntohs(addr_srv.sin_port));
 			kfree(tmp);
 			printk("kfree(tmp)");
+			wake_up_process(async_kthread);
 			ret = 0;
 			break;
 		case slave_IOCTL_MMAP:
@@ -290,7 +288,7 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 			break;
 	}
     set_fs(old_fs);
-	
+
 	return ret;
 }
 
