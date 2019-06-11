@@ -62,7 +62,7 @@ int main (int argc, char* argv[])
 		case 'f'://fcntl : read()/write()
 			do
 			{
-				while(ret = read(dev_fd, buf, sizeof(buf))<0&&errno==EAGAIN); // read from the the device
+				while((ret = read(dev_fd, buf, sizeof(buf)))<0&&errno==EAGAIN); // read from the the device
 				write(file_fd, buf, ret); //write to the input file
 				file_size += ret;
 			}while(ret > 0);
