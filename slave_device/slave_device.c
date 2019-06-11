@@ -19,6 +19,8 @@
 #include <linux/debugfs.h>
 #include <linux/mm.h>
 #include <asm/page.h>
+#include <linux/kthread.h>
+#include <linux/mutex.h>
 
 
 #ifndef VM_RESERVED
@@ -32,6 +34,7 @@
 
 #define BUF_SIZE 512
 #define MAP_SIZE (PAGE_SIZE * 10)
+#define ASYNC_BUF_SIZE (32*MAP_SIZE)
 
 
 
@@ -86,6 +89,13 @@ struct vm_operations_struct mmap_vm_ops = {
 	.close = mmap_close,
 };
 
+struct data_queue{
+	char data[MAP_SIZE];
+	int begin,end;
+	int finish;
+	char async_buf[ASYNC_BUF_SIZE];
+};
+
 static int __init slave_init(void)
 {
 	int ret;
@@ -109,18 +119,99 @@ static void __exit slave_exit(void)
 	debugfs_remove(file1);
 }
 
+struct mutex async_mutex;
+struct task_struct *async_kthread;
 
 int slave_close(struct inode *inode, struct file *filp)
 {
-	kfree(filp->private_data);
+	kthread_stop(async_kthread);
+	return 0;
+}
+
+static int async_recv(void *private_data)
+{
+	struct data_queue* data=private_data;
+	int begin,end,len;
+	while(!kthread_should_stop()){
+		mutex_lock(&async_mutex);
+		begin=data->begin;
+		end=data->end;
+		if((begin-end-1+ASYNC_BUF_SIZE)%ASYNC_BUF_SIZE == 0 || data->finish==1)
+		{
+			mutex_unlock(&async_mutex);
+			set_current_state(TASK_INTERRUPTIBLE);
+			if(kthread_should_stop())break;
+			continue;
+		}
+		else
+		{
+			mutex_unlock(&async_mutex);
+		}
+		if(begin<=end)
+			len = krecv(sockfd_cli, (data->async_buf)+end, begin==0?ASYNC_BUF_SIZE-1-end:ASYNC_BUF_SIZE-end , 0);
+		else
+			len = krecv(sockfd_cli, (data->async_buf)+end, begin-end-1 , 0);
+		mutex_lock(&async_mutex);
+		data->end=(end+len)%ASYNC_BUF_SIZE;
+		if(len==0)data->finish=1;
+		mutex_unlock(&async_mutex);
+	}
+	kfree(private_data);
 	return 0;
 }
 
 int slave_open(struct inode *inode, struct file *filp)
 {
-	filp->private_data = kmalloc(MAP_SIZE, GFP_KERNEL);
+	filp->private_data = kmalloc(sizeof(struct data_queue), GFP_KERNEL);
+	((struct data_queue*)(filp->private_data))->begin=0;
+	((struct data_queue*)(filp->private_data))->end=0;
+	((struct data_queue*)(filp->private_data))->finish=0;
+	mutex_init(&async_mutex);
+	async_kthread=kthread_create(async_recv,filp->private_data,"slave_async_recv");
 	return 0;
 }
+static ssize_t async_recv_msg(struct file *file, void *msg,size_t count){
+	int begin,end,fin;
+	long ret;
+	int size;
+	mutex_lock(&async_mutex);
+	begin = ((struct data_queue*)(file->private_data))->begin;
+	end = ((struct data_queue*)(file->private_data))->end;
+	fin = ((struct data_queue*)(file->private_data))->finish;
+	mutex_unlock(&async_mutex);
+	if(begin==end)
+	{
+		if(fin==1)
+			ret=0;
+		else
+		{
+			ret=-EAGAIN;
+			wake_up_process(async_kthread);
+		}
+	}
+	else
+	{
+		size=count;
+		if(begin<end)
+		{
+			if(size>end-begin)
+				size=end-begin;
+		}
+		else
+		{
+			if(size>ASYNC_BUF_SIZE-begin)
+				size=ASYNC_BUF_SIZE-begin;
+		}
+		memcpy(msg,((struct data_queue*)(file->private_data))->async_buf+begin,size);
+		mutex_lock(&async_mutex);
+		((struct data_queue*)(file->private_data))->begin=(begin+size)%ASYNC_BUF_SIZE;
+		mutex_unlock(&async_mutex);
+		ret = size;
+		wake_up_process(async_kthread);
+	}
+	return ret;
+}
+
 static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param)
 {
 	long ret = -EINVAL;
@@ -144,7 +235,7 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 
 	switch(ioctl_num){
 		case slave_IOCTL_CREATESOCK:// create socket and connect to master
-            printk("slave device ioctl create socket");
+			printk("slave device ioctl create socket");
 
 			if(copy_from_user(ip, (char*)ioctl_param, sizeof(ip)))
 				return -ENOMEM;
@@ -176,7 +267,7 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 			ret = 0;
 			break;
 		case slave_IOCTL_MMAP:
-			ret = krecv(sockfd_cli, file->private_data, MAP_SIZE, 0);
+			ret = async_recv_msg(file,((struct data_queue*)(file->private_data))->data,MAP_SIZE);
 			break;
 
 		case slave_IOCTL_EXIT:
@@ -199,7 +290,7 @@ static long slave_ioctl(struct file *file, unsigned int ioctl_num, unsigned long
 			break;
 	}
     set_fs(old_fs);
-
+	
 	return ret;
 }
 
@@ -208,7 +299,7 @@ ssize_t receive_msg(struct file *filp, char *buf, size_t count, loff_t *offp )
 //call when user is reading from this device
 	char msg[BUF_SIZE];
 	size_t len;
-	len = krecv(sockfd_cli, msg, sizeof(msg), 0);
+	len=async_recv_msg(filp,msg,sizeof(msg));
 	if(copy_to_user(buf, msg, len))
 		return -ENOMEM;
 	return len;

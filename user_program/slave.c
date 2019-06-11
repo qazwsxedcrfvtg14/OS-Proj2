@@ -21,7 +21,8 @@ int main (int argc, char* argv[])
 {
 	char buf[BUF_SIZE];
 	int i, dev_fd, file_fd;// the fd for the device and the fd for the input file
-	size_t ret, file_size = 0, data_size = -1;
+	size_t file_size = 0, data_size = -1;
+	ssize_t ret;
 	char file_name[50];
 	char method[20];
 	char ip[20];
@@ -61,7 +62,7 @@ int main (int argc, char* argv[])
 		case 'f'://fcntl : read()/write()
 			do
 			{
-				ret = read(dev_fd, buf, sizeof(buf)); // read from the the device
+				while(ret = read(dev_fd, buf, sizeof(buf))<0&&errno==EAGAIN); // read from the the device
 				write(file_fd, buf, ret); //write to the input file
 				file_size += ret;
 			}while(ret > 0);
@@ -72,7 +73,7 @@ int main (int argc, char* argv[])
 			{
 				posix_fallocate(file_fd, file_size, MAP_SIZE);
 				mapped_mem = mmap(NULL, MAP_SIZE, PROT_WRITE, MAP_SHARED, file_fd, file_size);
-				ret = ioctl(dev_fd, slave_IOCTL_MMAP);
+				while((ret = ioctl(dev_fd, slave_IOCTL_MMAP))<0&&errno==EAGAIN);
 				if(ret==0)
 					break;
 				else if(ret<0)

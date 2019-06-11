@@ -23,7 +23,8 @@ int main (int argc, char* argv[])
 {
 	char buf[BUF_SIZE];
 	int i, dev_fd, file_fd;// the fd for the device and the fd for the input file
-	size_t ret, file_size, offset = 0, tmp;
+	size_t file_size, offset = 0, tmp;
+	ssize_t ret;
 	char file_name[50], method[20];
 	char *kernel_address = NULL, *file_address = NULL;
 	struct timeval start;
