@@ -297,7 +297,7 @@ ssize_t receive_msg(struct file *filp, char *buf, size_t count, loff_t *offp )
 {
 //call when user is reading from this device
 	char msg[BUF_SIZE];
-	size_t len;
+	ssize_t len;
 	len=async_recv_msg(filp,msg,sizeof(msg));
 	if(len<0)
 		return len;
