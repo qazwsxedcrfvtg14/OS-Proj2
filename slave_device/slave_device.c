@@ -124,6 +124,7 @@ struct task_struct *async_kthread;
 
 int slave_close(struct inode *inode, struct file *filp)
 {
+	wake_up_process(async_kthread);
 	kthread_stop(async_kthread);
 	return 0;
 }
